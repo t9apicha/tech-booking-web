@@ -3,7 +3,17 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { db, saveSession, UserRole } from '@/lib/supabase';
-import { Wrench, User, ShieldCheck, Loader2, AlertCircle, CheckCircle2 } from 'lucide-react';
+import {
+  Wrench,
+  User,
+  ShieldCheck,
+  Loader2,
+  AlertCircle,
+  CheckCircle2,
+  Wind,
+  Droplets,
+  Zap,
+} from 'lucide-react';
 
 interface Province {
   ProvinceID: string;
@@ -38,7 +48,7 @@ export default function AuthPage() {
   const [regPhone, setRegPhone] = useState('');
   const [regProvince, setRegProvince] = useState('');
   const [regMainCategory, setRegMainCategory] = useState('');
-  const [regCategory, setRegCategory] = useState('');
+  const [regCategories, setRegCategories] = useState<string[]>([]);
   const [regAddress, setRegAddress] = useState('');
 
   useEffect(() => {
@@ -52,13 +62,42 @@ export default function AuthPage() {
     fetchMasterData();
   }, []);
 
-  // ดึงรายชื่อหมวดช่างหลักแบบไม่ซ้ำ (ช่างแอร์, ช่างประปา, ช่างไฟฟ้า)
+  // รายชื่อสายงานช่างหลัก (ช่างแอร์, ช่างประปา, ช่างไฟฟ้า)
   const mainCategories = Array.from(
     new Set(categories.map((c) => c.MainCategory).filter(Boolean))
   );
 
-  // กรองบริการย่อยตามหมวดช่างหลักที่เลือก
+  // กรองบริการย่อยเฉพาะในสายงานช่างหลักที่เลือก
   const subCategories = categories.filter((c) => c.MainCategory === regMainCategory);
+
+  const isAllSubSelected =
+    subCategories.length > 0 && subCategories.every((sub) => regCategories.includes(sub.CategoryID));
+
+  const handleSelectMainCategory = (mc: string) => {
+    setRegMainCategory(mc);
+    setRegCategories([]); // ล้างรายการย่อยเดิมเมื่อเปลี่ยนสายงานช่าง
+  };
+
+  const toggleRegCategory = (catId: string) => {
+    setRegCategories((prev) =>
+      prev.includes(catId) ? prev.filter((id) => id !== catId) : [...prev, catId]
+    );
+  };
+
+  const handleToggleAllInTrade = () => {
+    if (isAllSubSelected) {
+      setRegCategories([]);
+    } else {
+      setRegCategories(subCategories.map((sub) => sub.CategoryID));
+    }
+  };
+
+  const getMainIcon = (name: string) => {
+    if (name.includes('แอร์')) return <Wind className="w-4 h-4" />;
+    if (name.includes('ประปา')) return <Droplets className="w-4 h-4" />;
+    if (name.includes('ไฟ')) return <Zap className="w-4 h-4" />;
+    return <Wrench className="w-4 h-4" />;
+  };
 
   const handleRoleChange = (newRole: UserRole) => {
     setRole(newRole);
@@ -143,25 +182,44 @@ export default function AuthPage() {
         setAlert({ type: 'success', text: 'สมัครสมาชิกลูกค้าสำเร็จ! กรุณาเข้าสู่ระบบ' });
         setMode('login');
       } else if (role === 'technician') {
+        if (!regMainCategory) {
+          throw new Error('กรุณาเลือกประเภทสายงานช่างหลัก');
+        }
+        if (regCategories.length === 0) {
+          throw new Error(`กรุณาเลือกบริการของ${regMainCategory}อย่างน้อย 1 รายการ`);
+        }
+
+        const techId = `TEC${randomCode}`;
+
         const { error } = await db.from('Technicians').insert([
           {
-            TechnicianID: `TEC${randomCode}`,
+            TechnicianID: techId,
             TechnicianName: regName.trim(),
             TechnicianEmail: regEmail.trim(),
             TechnicianPassword: regPassword,
             TechnicianPhone: regPhone.trim(),
             ProvinceID: regProvince,
-            CategoryID: regCategory,
+            CategoryID: regCategories[0],
             Address: regAddress.trim(),
             approved: false,
           },
         ]);
         if (error) throw new Error(error.message);
 
+        const serviceRows = regCategories.map((catId) => ({
+          TechnicianID: techId,
+          CategoryID: catId,
+        }));
+
+        const { error: serviceError } = await db.from('TechnicianServices').insert(serviceRows);
+        if (serviceError) throw new Error(serviceError.message);
+
         setAlert({
           type: 'success',
-          text: 'ลงทะเบียนช่างสำเร็จ! กรุณารอแอดมินกดอนุมัติก่อนเข้าใช้งาน',
+          text: `ลงทะเบียน${regMainCategory}สำเร็จ (${regCategories.length} บริการ)! กรุณารอแอดมินกดอนุมัติก่อนเข้าใช้งาน`,
         });
+        setRegMainCategory('');
+        setRegCategories([]);
         setMode('login');
       }
     } catch (err: unknown) {
@@ -174,7 +232,7 @@ export default function AuthPage() {
 
   return (
     <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
-      <div className="bg-white w-full max-w-md rounded-2xl shadow-lg p-8 border border-slate-200">
+      <div className="bg-white w-full max-w-lg rounded-2xl shadow-lg p-8 border border-slate-200">
         <div className="text-center mb-6">
           <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-blue-600 text-white mb-3">
             <Wrench className="w-6 h-6" />
@@ -360,48 +418,84 @@ export default function AuthPage() {
 
             {role === 'technician' && (
               <>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">
-                      1. ประเภทช่างหลัก
-                    </label>
-                    <select
-                      required
-                      value={regMainCategory}
-                      onChange={(e) => {
-                        setRegMainCategory(e.target.value);
-                        setRegCategory('');
-                      }}
-                      className="w-full px-3 py-2 rounded-xl border border-slate-300 text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-teal-500"
-                    >
-                      <option value="">-- เลือกประเภทช่าง --</option>
-                      {mainCategories.map((mc) => (
-                        <option key={mc} value={mc}>
-                          {mc}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">
-                      2. บริการที่รับทำ
-                    </label>
-                    <select
-                      required
-                      disabled={!regMainCategory}
-                      value={regCategory}
-                      onChange={(e) => setRegCategory(e.target.value)}
-                      className="w-full px-3 py-2 rounded-xl border border-slate-300 text-slate-800 bg-white disabled:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-teal-500"
-                    >
-                      <option value="">-- เลือกบริการ --</option>
-                      {subCategories.map((c) => (
-                        <option key={c.CategoryID} value={c.CategoryID}>
-                          {c.CategoryName} ({c.CategoryPrice} ฿)
-                        </option>
-                      ))}
-                    </select>
+                {/* ขั้นที่ 1: เลือกสายงานช่างหลัก */}
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                    1. เลือกประเภทสายงานช่างหลัก
+                  </label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {mainCategories.map((mc) => {
+                      const isActive = regMainCategory === mc;
+                      return (
+                        <button
+                          key={mc}
+                          type="button"
+                          onClick={() => handleSelectMainCategory(mc)}
+                          className={`flex items-center justify-center gap-1.5 py-2.5 px-2 rounded-xl border text-xs font-semibold transition ${
+                            isActive
+                              ? 'bg-teal-600 text-white border-teal-600 shadow-sm'
+                              : 'bg-white text-slate-700 border-slate-300 hover:border-teal-400'
+                          }`}
+                        >
+                          {getMainIcon(mc)}
+                          <span>{mc}</span>
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
+
+                {/* ขั้นที่ 2: เลือกบริการย่อยเฉพาะในสายงานที่เลือก (เลือกได้หลายรายการ) */}
+                {regMainCategory && (
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-bold text-slate-700">
+                        2. เลือกบริการของ{regMainCategory} (เลือกได้หลายรายการ)
+                      </label>
+                      <button
+                        type="button"
+                        onClick={handleToggleAllInTrade}
+                        className="text-xs font-semibold text-teal-700 hover:underline"
+                      >
+                        {isAllSubSelected ? 'ล้างที่เลือกทั้งหมด' : 'เลือกทั้งหมดในสายงานนี้'}
+                      </button>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      {subCategories.map((sub) => {
+                        const checked = regCategories.includes(sub.CategoryID);
+                        return (
+                          <label
+                            key={sub.CategoryID}
+                            className={`flex items-center justify-between p-2.5 rounded-lg border text-sm cursor-pointer transition ${
+                              checked
+                                ? 'bg-teal-50 border-teal-500 text-teal-900 font-medium'
+                                : 'bg-white border-slate-200 text-slate-700 hover:border-teal-300'
+                            }`}
+                          >
+                            <span className="flex items-center gap-2">
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => toggleRegCategory(sub.CategoryID)}
+                                className="rounded text-teal-600 focus:ring-teal-500"
+                              />
+                              {sub.CategoryName}
+                            </span>
+                            <span className="text-xs text-slate-500">
+                              {sub.CategoryPrice.toLocaleString()} ฿
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+
+                    <p className="text-xs text-right text-teal-700 font-medium">
+                      เลือกแล้ว {regCategories.length} จาก {subCategories.length} รายการ
+                    </p>
+                  </div>
+                )}
+
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">ที่อยู่ปัจจุบัน</label>
                   <textarea
